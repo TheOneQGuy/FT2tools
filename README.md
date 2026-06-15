@@ -1,5 +1,5 @@
 # FT2tools
-Two tools for the Tt Games FT2 font format, one for extracting to json+dds and recompiling, the other one for TTF to json+dds so it can be recompiled with the first one. I might make FT2 to TTF too.
+Two tools for the Tt Games FT2 font format, one for extracting to json+dds and recompiling, the other one for TTF to json+dds so it can be recompiled with the first one. I might make FT2 to TTF too. To download, you can click the green Code button and press Download ZIP, or you can download the files individually.
 
 ## FT2 extract and reimport
 Can extract FT2 into a json+dds and also reimport from json+dds into FT2.
