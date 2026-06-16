@@ -233,7 +233,7 @@ def override():
     
     decode_file()
     chars_list_json_string = "[\n" + ",\n".join(json.dumps(item, ensure_ascii=False) for item in chardict) + "\n]"
-    json_string = f'"global_height": {global_height}\n"chars": {chars_list_json_string}'
+    json_string = '{\n' f'"global_height": {global_height},\n"chars": {chars_list_json_string}' "}"
     json_file.write_text(
         json_string
         , encoding="utf-8", newline="\n")
