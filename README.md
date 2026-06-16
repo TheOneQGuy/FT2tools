@@ -15,4 +15,4 @@ Note: Vanilla spaces use x=0 and y=0 and the game simply doesn't draw anything f
 ## TTF to FT2
 Can convert TTF fonts to json+dds which can be reimported to an FT2. It also gives you the option for outlines and kerning.
 
-Requires Python + pillow and fonttools (Install using `py -m pip install pillow fonttools` in command prompt after installing Python). This one *does* have a GUI and you just double click it to open it. It is recommended to use the size that the FT2 you're going to import to uses. *This tool was coded by AI*
+Requires Python + pillow (Install using `py -m pip install pillow` in command prompt after installing Python). This one *does* have a GUI and you just double click it to open it. It is recommended to use the size that the FT2 you're going to import to uses. *This tool was coded by AI*
