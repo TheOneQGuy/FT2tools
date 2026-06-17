@@ -18,21 +18,25 @@ def get_ROTV_section(file_bytes:bytes, idx:int=0, returns_offset:bool=False):
     if contains_ROTV:
         file_bytes = file_bytes.replace(b"ROTV",b"NOTV", idx)
         ROTVpos = file_bytes.index(b"ROTV")
-    else:
+    elif contains_ROTV_space:
         ROTVpos = 43
         if idx:
             ROTVpos+=8+len(get_ROTV_section(file_bytes, 0))
+    else:
+        ROTVpos = 50
+        if idx:
+            ROTVpos+=8+len(get_ROTV_section(file_bytes, 0))-4
     section_len = int(file_bytes[ROTVpos+4:ROTVpos+8].hex(), 16)
     #print(section_len)
     attributes_count_local=attributes_count
     if idx:
-        attributes_count_local=1 #will only set it locally
+        attributes_count_local=1
     return (file_bytes[ROTVpos+8 : ROTVpos+8+section_len*attributes_count_local*4]
             if not returns_offset else
             ROTVpos)
     
 def get_global_height(file_bytes:bytes, returns_offset:bool=False):
-    current_offset=get_ROTV_section(file_bytes, 0, returns_offset=True)-8-1
+    current_offset=get_ROTV_section(file_bytes, 0, returns_offset=True)-1
     
     #Go left till you find a non-00 byte, then go left till you find a 00 byte
     while file_bytes[current_offset] == 0:
@@ -64,24 +68,44 @@ def get_file_info(file_bytes:Path):
     global contents; contents = file_bytes.read_bytes()
     global version; version = contents[15]
     global contains_ROTV; contains_ROTV = b'ROTV' in contents
+    global contains_ROTV_space; contains_ROTV_space = contains_ROTV or version>2
     global attributes_count
     attributes_count = 7 if version>3 else 3
     attributes_count = 8 if version==7 else attributes_count
     global attribute_names
     attribute_names=("x","y","width","height","x_offset","y_offset","advance","page")
-
-    print(f"Version {version}")
-    print(f"ROTV attributes: {attributes_count}: {attribute_names[:attributes_count]}")
-    print(f'Uses "ROTV": {contains_ROTV}')
-
     global dds_pos; dds_pos = contents.index(b"DDS |")
     global dds_contents; dds_contents=contents[dds_pos:]
 
+    known_supported_versions = [2,3,12]
+    known_unsupported_versions = [4]
+
+    if version in known_supported_versions:
+        support_status="supported"
+    elif version in known_unsupported_versions:
+        support_status="unsupported"
+    else:
+        support_status="support unknown"
+
+    print(f"Version {version:02X} ({version}), {support_status}")
+    if support_status=="unsupported":
+        input(f"Version {version:02X} is known to be unsupported. Press enter to try anyway.")
+    if support_status=="support unknown":
+        input(f"It is unknown if this file (version {version:02X}) is supported. Press enter to try anyway.")
+    print(f"{attributes_count} ROTV attributes: {attribute_names[:attributes_count]}")
+
+    ROTV_string='ROTV' if contains_ROTV else '\x00'*4
+    if not contains_ROTV_space:
+        ROTV_string=''
+    print(f'ROTV string: b"{ROTV_string}"')
+
+
+
 def decode_file():
     # Section 1 where W is Width, H is Height, T is Top, L is Left, A is Advance, P is Page
-    # XX XX XX XX YY YY YY YY WW WW WW WW (V3)
+    # XX XX XX XX YY YY YY YY WW WW WW WW (V2,V3)
     # XX XX XX XX YY YY YY YY WW WW WW WW HH HH HH HH TT TT TT TT LL LL LL LL AA AA AA AA (V4+ != 7)
-    # XX XX XX XX YY YY YY YY WW WW WW WW HH HH HH HH TT TT TT TT LL LL LL LL AA AA AA AA PP PP PP PP (V7)
+    # XX XX XX XX YY YY YY YY WW WW WW WW HH HH HH HH TT TT TT TT LL LL LL LL AA AA AA AA PP PP PP PP (V7) <-- this is only known because of ghidra-decompiled code from DCSV, we haven't seen a v07 file yet
     global contents
     section = get_ROTV_section(contents, 0)
     global global_height; global_height = get_global_height(contents)
