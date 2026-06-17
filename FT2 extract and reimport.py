@@ -128,14 +128,14 @@ def decode_file():
     #Section 2 (CC CC II II) where C is character, I is index for section 1.
     section = get_ROTV_section(contents, 1)
     c=0
-    while len(section)>3:
+    while len(section[c:c+4])>3:
         char=section[c:c+2].decode("utf-16-be")
         try:
             idx=int(section[c+2:c+4].hex(), 16)
         
             chardict.append({"char":char,**attributes[idx]})
         except IndexError, ValueError:
-            break
+            pass #break <-- Less sensitive, i've seen vanilla FT2 with indices out of range (e.g. LB2 button FT2s)
         c+=4
 
     #Section 3 - just dds, exported in get_file_info()
