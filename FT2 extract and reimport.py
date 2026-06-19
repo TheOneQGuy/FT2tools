@@ -140,7 +140,7 @@ def decode_file():
 
     #Section 3 - just dds, exported in get_file_info()
 
-def json_to_tnfn(file_text:Path):
+def json_to_ft2(file_text:Path):
 
     json_file_contents=json.loads(file_text.read_text(encoding="utf-8", newline="\n"))
     json_list=json_file_contents["chars"]
@@ -149,26 +149,60 @@ def json_to_tnfn(file_text:Path):
     except KeyError:
         new_global_height=60
     used_attribute_names=attribute_names[:attributes_count]
-    values_to_write=b'\x00'*(attributes_count*4)
-    chars_to_write=b''
 
-    print(used_attribute_names)
-    # Important: game only accepts FT2  with chars in unicode order
-    json_list.sort(key=lambda x: x["char"]) 
+  # Jon Burton's completely normal and not-at-all stupid FT2 rules:
+
+    # 1- Section 2 chars need to be sorted in unicode order.
+
+    # 2- Section 2 chars only start using indices from 1, even though the actual
+    #    indices start from 0, meaning there's an empty all-00-bytes entry in section 1.
+
+    # 3- For space character to work correctly, it needs to have index 0x20 in section 2,
+    #    and section 1 needs to be re-ordered for this.
+
+  # (yk now i get why sav wanted to torture jon burton)
+
+    json_list.sort(key=lambda x: x["char"])
 
     global json_entries_number; json_entries_number=len(json_list)
-    for i in range(json_entries_number):
+
+    indexed_entries=[]
+    next_index=1
+    for item in json_list:
+        current_char = item["char"]
+        if current_char == " ":
+            current_index = 0x20
+        else:
+            if next_index == 0x20:
+                next_index += 1
+            current_index = next_index
+            next_index += 1
+        indexed_entries.append((item, current_index))
+
+    max_index = max((idx for _, idx in indexed_entries), default=0)
+
+    section1_slots = [b'\x00' * (attributes_count * 4) for _ in range(max_index + 1)]
+    chars_to_write = b''
+
+    for item, current_index in indexed_entries:
+        record = b''
         for j in used_attribute_names:
             try:
-                current_val=json_list[i][j]
+                current_val=item[j]
             except KeyError:
                 current_val=0
-            values_to_write+=(struct.pack('>f',current_val))
-        current_char = json_list[i]["char"].encode("utf-16-be")
-        chars_to_write+=(current_char
-                         +(i+1).to_bytes(2, byteorder="big"))
+            record += struct.pack('>f', current_val)
+        section1_slots[current_index] = record
 
-    print(len(values_to_write),len(chars_to_write))
+        current_char = item["char"].encode("utf-16-be")
+        chars_to_write += (
+            current_char
+            + current_index.to_bytes(2, byteorder="big")
+        )
+
+    values_to_write = b''.join(section1_slots)
+
+    #print(len(values_to_write),len(chars_to_write))
 
     global contents
     global contentsnew
@@ -267,7 +301,7 @@ def reimport():
     global contents
     contents = contents[:dds_pos]
     if json_file.is_file():
-        json_to_tnfn(json_file)
+        json_to_ft2(json_file)
     if dds_file.is_file():
         contents+=dds_file.read_bytes()
     else:
