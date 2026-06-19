@@ -8,9 +8,7 @@ The json contains the characters along with their x, y, and width on the dds. Th
 
 Supports most FT2 versions, it doesn't support button FT2s (version 02) and LCU FT2s (version 04). It has also not been tested on TSS FT2s. However most games can read FT2s from previous games just fine.
 
-Requires Python to use. There's no GUI, drag your FT2 to the .py file; If a json or dds with the same name as the FT2 is found, it will give you the option to reimport.
-
-Note: Vanilla spaces use x=0 and y=0 and the game simply doesn't draw anything for them, even though it would usually be an exclamation mark that is cut off. This tool sometimes breaks those spaces and ingame the cut off exclamation mark would actually be shown. To fix this, just set the space's x and y to somewhere that is empty in the image. *This tool was coded by me.*
+Requires Python to use. There's no GUI, drag your FT2 to the .py file; If a json or dds with the same name as the FT2 is found, it will give you the option to reimport. *This tool was coded by me.*
 
 ## TTF to FT2
 Can convert TTF fonts to json+dds which can be reimported to an FT2. It also gives you the option for outlines and kerning.
