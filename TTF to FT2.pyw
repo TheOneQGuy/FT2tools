@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Sequence
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -115,7 +115,28 @@ def _choose_nearest_index(values: Sequence[int], target: int) -> int:
     return best_i
 
 
-def encode_dxt5_dds(image: Image.Image) -> bytes:
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = value.strip()
+    if value.startswith("#"):
+        value = value[1:]
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    if len(value) != 6:
+        raise ValueError(f"Invalid color value: {value!r}")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def encode_dxt5_dds(
+    image: Image.Image,
+    main_rgb: tuple[int, int, int] = (255, 255, 255),
+    outline_rgb: tuple[int, int, int] = (0, 0, 0),
+    background_rgb: tuple[int, int, int] = (255, 255, 255),
+) -> bytes:
     """Encode an RGBA image to a legacy DDS file using DXT5 and no mipmaps."""
     img = image.convert("RGBA")
     width, height = img.size
@@ -125,7 +146,23 @@ def encode_dxt5_dds(image: Image.Image) -> bytes:
         off = (y * width + x) * 4
         return raw[off], raw[off + 1], raw[off + 2], raw[off + 3]
 
+    def nearest_idx(colors: list[tuple[int, int, int]], rgb: tuple[int, int, int]) -> int:
+        r, g, b = rgb
+        best_i = 0
+        best_d = 10**18
+        for i, (cr, cg, cb) in enumerate(colors):
+            d = (cr - r) ** 2 + (cg - g) ** 2 + (cb - b) ** 2
+            if d < best_d:
+                best_d = d
+                best_i = i
+        return best_i
+
     blocks = bytearray()
+
+    c0 = _pack_565(*main_rgb)
+    c1 = _pack_565(*outline_rgb)
+    if c0 <= c1:
+        c0, c1 = c1, c0
 
     for by in range(0, height, 4):
         for bx in range(0, width, 4):
@@ -135,35 +172,19 @@ def encode_dxt5_dds(image: Image.Image) -> bytes:
                 for x in range(4)
             ]
 
-            # Use the 8-entry alpha path for better edge preservation.
             a0, a1 = 255, 0
             ap = _alpha_palette(a0, a1)
-
             alpha_index_bits = 0
             for i, (_, _, _, a) in enumerate(block_pixels):
                 idx = _choose_nearest_index(ap, a)
                 alpha_index_bits |= (idx & 0x7) << (3 * i)
 
-            # Store white fill + black outline using a normal BC1 color block.
-            c0 = _pack_565(255, 255, 255)
-            c1 = _pack_565(0, 0, 0)
             colors = _color_palette(c0, c1)
-
             color_index_bits = 0
             for i, (r, g, b, a) in enumerate(block_pixels):
                 if a == 0:
-                    idx = 0
-                else:
-                    idx = min(
-                        range(4),
-                        key=lambda j: (
-                            colors[j][0] - r
-                        ) ** 2 + (
-                            colors[j][1] - g
-                        ) ** 2 + (
-                            colors[j][2] - b
-                        ) ** 2
-                    )
+                    r, g, b = background_rgb
+                idx = nearest_idx(colors, (r, g, b))
                 color_index_bits |= (idx & 0x3) << (2 * i)
 
             blocks.append(a0)
@@ -173,7 +194,6 @@ def encode_dxt5_dds(image: Image.Image) -> bytes:
 
     linear_size = len(blocks)
 
-    # IMPORTANT: 0x00080000 is DDSD_LINEARSIZE.
     flags = 0x00081007  # CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE
     caps = 0x00001000   # DDSCAPS_TEXTURE
 
@@ -184,9 +204,8 @@ def encode_dxt5_dds(image: Image.Image) -> bytes:
     header += struct.pack("<I", linear_size)
     header += struct.pack("<I", 0)  # depth
     header += struct.pack("<I", 0)  # mipmap count
-    header += b"\x00" * 44          # reserved1[11]
+    header += b"\x00" * 44         # reserved1[11]
 
-    # DDS_PIXELFORMAT
     pf_flags = 0x00000004  # DDPF_FOURCC
     header += struct.pack("<I", DDS_PIXELFORMAT_SIZE)
     header += struct.pack("<I", pf_flags)
@@ -198,10 +217,10 @@ def encode_dxt5_dds(image: Image.Image) -> bytes:
     header += struct.pack("<I", 0)  # aMask
 
     header += struct.pack("<I", caps)  # caps1
-    header += struct.pack("<I", 0)     # caps2
-    header += struct.pack("<I", 0)     # caps3
-    header += struct.pack("<I", 0)     # caps4
-    header += struct.pack("<I", 0)     # reserved2
+    header += struct.pack("<I", 0)      # caps2
+    header += struct.pack("<I", 0)      # caps3
+    header += struct.pack("<I", 0)      # caps4
+    header += struct.pack("<I", 0)      # reserved2
 
     assert len(header) == 124, len(header)
     return DDS_MAGIC + header + bytes(blocks)
@@ -260,8 +279,89 @@ def decode_dxt5_dds(data: bytes) -> Image.Image:
     return img
 
 
-def save_dds_dxt5(image: Image.Image, path: Path) -> None:
-    path.write_bytes(encode_dxt5_dds(image))
+def save_dds_dxt5(
+    image: Image.Image,
+    path: Path,
+    main_rgb: tuple[int, int, int] = (255, 255, 255),
+    outline_rgb: tuple[int, int, int] = (0, 0, 0),
+    background_rgb: tuple[int, int, int] = (255, 255, 255),
+) -> None:
+    path.write_bytes(
+        encode_dxt5_dds(
+            image,
+            main_rgb=main_rgb,
+            outline_rgb=outline_rgb,
+            background_rgb=background_rgb,
+        )
+    )
+def decode_dxt5_dds(data: bytes) -> Image.Image:
+    """Decode a legacy DDS file with a DXT5 texture into RGBA."""
+    if len(data) < 128 or data[:4] != DDS_MAGIC:
+        raise ValueError("Not a DDS file.")
+
+    header = data[4:128]
+    size, flags, height, width, pitch_or_linear, depth, mipmaps = struct.unpack("<7I", header[:28])
+    if size != DDS_HEADER_SIZE:
+        raise ValueError("Unsupported DDS header size.")
+    pf_off = 72
+    pf_size, pf_flags = struct.unpack("<II", header[pf_off:pf_off + 8])
+    fourcc = header[pf_off + 8:pf_off + 12]
+    if pf_size != DDS_PIXELFORMAT_SIZE or fourcc != DDS_DXT5_FOURCC:
+        raise ValueError("Only DXT5 DDS files are supported.")
+
+    block_data = data[128:]
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+    blocks_x = (width + 3) // 4
+    blocks_y = (height + 3) // 4
+    idx = 0
+
+    for by in range(blocks_y):
+        for bx in range(blocks_x):
+            chunk = block_data[idx:idx + 16]
+            if len(chunk) < 16:
+                raise ValueError("DDS data is truncated.")
+            idx += 16
+
+            a0 = chunk[0]
+            a1 = chunk[1]
+            alpha_bits = int.from_bytes(chunk[2:8], "little")
+            alphas = _alpha_palette(a0, a1)
+
+            c0, c1, color_bits = struct.unpack("<HHI", chunk[8:16])
+            colors = _color_palette(c0, c1)
+
+            for py in range(4):
+                for px in range(4):
+                    x = bx * 4 + px
+                    y = by * 4 + py
+                    if x >= width or y >= height:
+                        continue
+                    i = py * 4 + px
+                    a_idx = (alpha_bits >> (3 * i)) & 0x7
+                    c_idx = (color_bits >> (2 * i)) & 0x3
+                    r, g, b = colors[c_idx]
+                    a = alphas[a_idx]
+                    img.putpixel((x, y), (r, g, b, a))
+
+    return img
+
+
+def save_dds_dxt5(
+    image: Image.Image,
+    path: Path,
+    main_rgb: tuple[int, int, int] = (255, 255, 255),
+    outline_rgb: tuple[int, int, int] = (0, 0, 0),
+    background_rgb: tuple[int, int, int] = (255, 255, 255),
+) -> None:
+    path.write_bytes(
+        encode_dxt5_dds(
+            image,
+            main_rgb=main_rgb,
+            outline_rgb=outline_rgb,
+            background_rgb=background_rgb,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,11 +430,16 @@ def render_ttf_glyphs(
     outline_px: int,
     scale_pct: int = 100,
     kerning: int = 0,
+    main_rgb: tuple[int, int, int] = (255, 255, 255),
+    outline_rgb: tuple[int, int, int] = (0, 0, 0),
 ) -> list[AtlasGlyph]:
     target_h = max(1, int(height))
     outline_px = max(0, int(outline_px))
     scale_pct = max(1, min(100, int(scale_pct)))
     kerning = max(0, int(kerning))
+
+    background_rgb = main_rgb if outline_px == 0 else outline_rgb
+    background_rgba = (*background_rgb, 0)
 
     pad = max(2, outline_px + 2)
 
@@ -375,16 +480,16 @@ def render_ttf_glyphs(
         right_overlap = max(0, int(math.ceil(x1 - font.getlength(ch))))
         vis_w = max(1, int(math.ceil(x1 - x0))) + pad * 2
 
-        cell = Image.new("RGBA", (vis_w, target_h), (0, 0, 0, 0))
+        cell = Image.new("RGBA", (vis_w, target_h), background_rgba)
         draw = ImageDraw.Draw(cell)
 
         draw.text(
             (pad - x0, baseline_y),
             ch,
             font=font,
-            fill=(255, 255, 255, 255),
+            fill=(*main_rgb, 255),
             stroke_width=outline_px,
-            stroke_fill=(0, 0, 0, 255),
+            stroke_fill=(*outline_rgb, 255),
             anchor="ls",
         )
 
@@ -397,7 +502,7 @@ def render_ttf_glyphs(
             scaled_h = max(1, round(cell.height * scale_pct / 100))
             cell = cell.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
 
-            final_cell = Image.new("RGBA", (cell.width, target_h), (0, 0, 0, 0))
+            final_cell = Image.new("RGBA", (cell.width, target_h), background_rgba)
             paste_y = (target_h - cell.height) // 2
             final_cell.alpha_composite(cell, (0, paste_y))
             cell = final_cell
@@ -413,7 +518,7 @@ def render_ttf_glyphs(
                 padded = Image.new(
                     "RGBA",
                     (cell.width + left_pad + right_pad, target_h),
-                    (0, 0, 0, 0),
+                    background_rgba,
                 )
                 padded.alpha_composite(cell, (left_pad, 0))
                 cell = padded
@@ -425,9 +530,17 @@ def render_ttf_glyphs(
 
 def next_pow2(n: int) -> int:
     return 1 if n <= 1 else 1 << (n - 1).bit_length()
+def next_pow2(n: int) -> int:
+    return 1 if n <= 1 else 1 << (n - 1).bit_length()
 
 
-def pack_atlas(glyphs: Sequence[AtlasGlyph], atlas_width: int, row_gap: int = 1, force_pow2_height: bool = True) -> tuple[Image.Image, list[dict]]:
+def pack_atlas(
+    glyphs: Sequence[AtlasGlyph],
+    atlas_width: int,
+    row_gap: int = 1,
+    force_pow2_height: bool = True,
+    background_rgba: tuple[int, int, int, int] = (0, 0, 0, 0),
+) -> tuple[Image.Image, list[dict]]:
     if not glyphs:
         raise ValueError("No glyphs to pack.")
 
@@ -450,7 +563,7 @@ def pack_atlas(glyphs: Sequence[AtlasGlyph], atlas_width: int, row_gap: int = 1,
     for g in glyphs:
         if x > 0 and x + g.width > atlas_width:
             rows.append((current_row, current_row_h))
-            y += current_row_h # + row_gap
+            y += current_row_h
             x = 0
             current_row_h = cell_h
             current_row = []
@@ -466,7 +579,7 @@ def pack_atlas(glyphs: Sequence[AtlasGlyph], atlas_width: int, row_gap: int = 1,
     if force_pow2_height:
         atlas_h = next_pow2(atlas_h)
 
-    atlas = Image.new("RGBA", (atlas_width, atlas_h), (0, 0, 0, 0))
+    atlas = Image.new("RGBA", (atlas_width, atlas_h), background_rgba)
 
     for row, _h in rows:
         for g, px, py in row:
@@ -484,6 +597,9 @@ def convert_ttf_to_custom(
     kerning: int,
     atlas_width: int,
     force_pow2_height: bool,
+    main_rgb: tuple[int, int, int],
+    outline_rgb: tuple[int, int, int],
+    background_rgb: tuple[int, int, int],
     json_out: Path,
     dds_out: Path,
 ) -> None:
@@ -498,12 +614,16 @@ def convert_ttf_to_custom(
         outline_px=outline_px,
         scale_pct=scale_pct,
         kerning=kerning,
+        main_rgb=main_rgb,
+        outline_rgb=outline_rgb,
     )
+
     atlas, entries = pack_atlas(
         glyphs,
         atlas_width=atlas_width,
         row_gap=1,
         force_pow2_height=force_pow2_height,
+        background_rgba=(*background_rgb, 0),
     )
 
     payload = {
@@ -512,8 +632,17 @@ def convert_ttf_to_custom(
     }
 
     json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    save_dds_dxt5(atlas, dds_out)
+    save_dds_dxt5(
+        atlas,
+        dds_out,
+        main_rgb=main_rgb,
+        outline_rgb=outline_rgb,
+        background_rgb=background_rgb,
+    )
 
+# ---------------------------------------------------------------------------
+# GUI
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
@@ -533,8 +662,13 @@ class ConverterApp(tk.Tk):
         self.kerning = tk.IntVar(value=0)
         self.force_pow2_height = tk.BooleanVar(value=True)
         self.atlas_width = tk.IntVar(value=1024)
+        self.main_color = tk.StringVar(value="#ffffff")
+        self.outline_color = tk.StringVar(value="#000000")
 
         self._build_ui()
+
+        self.main_color.trace_add("write", self._sync_color_widgets)
+        self.outline_color.trace_add("write", self._sync_color_widgets)
 
     def _build_ui(self) -> None:
         pad = {"padx": 6, "pady": 4}
@@ -543,12 +677,24 @@ class ConverterApp(tk.Tk):
         cfg.pack(fill="x", **pad)
 
         self._add_spin(cfg, "Global height", self.height, 1, 4096, 0)
-        self._add_spin(cfg, "Outline px (TTF -> custom)", self.outline, 0, 256, 1)
+        self._add_spin(cfg, "Outline px", self.outline, 0, 256, 1)
         self._add_spin(cfg, "Atlas width", self.atlas_width, 32, 8192, 2)
-        self._add_spin(cfg, "Global kerning", self.kerning, 0,64, 0,1)
-        self._add_spin(cfg, "Scale %", self.scale, 10,100, 1,1)
+        self._add_spin(cfg, "Global kerning", self.kerning, 0, 64, 0, 1)
+        self._add_spin(cfg, "Scale %", self.scale, 10, 100, 1, 1)
 
-        ttk.Checkbutton(cfg, text="Force power-of-two atlas height", variable=self.force_pow2_height).grid(row=1, column=4, columnspan=4, sticky="w", padx=6, pady=4)
+        ttk.Checkbutton(cfg, text="Force power-of-two atlas height", variable=self.force_pow2_height).grid(
+            row=1, column=4, columnspan=4, sticky="w", padx=6, pady=4
+        )
+
+        ttk.Label(cfg, text="Main color").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        self.main_color_swatch = tk.Label(cfg, width=10, bg=self.main_color.get(), relief="sunken", cursor="hand2")
+        self.main_color_swatch.grid(row=2, column=1, sticky="w", padx=6, pady=4)
+        self.main_color_swatch.bind("<Button-1>", lambda _e: self._pick_main_color())
+
+        ttk.Label(cfg, text="Outline color").grid(row=2, column=2, sticky="w", padx=6, pady=4)
+        self.outline_color_swatch = tk.Label(cfg, width=10, bg=self.outline_color.get(), relief="sunken", cursor="hand2")
+        self.outline_color_swatch.grid(row=2, column=3, sticky="w", padx=6, pady=4)
+        self.outline_color_swatch.bind("<Button-1>", lambda _e: self._pick_outline_color())
 
         cfg.columnconfigure(1, weight=1)
         cfg.columnconfigure(3, weight=1)
@@ -587,6 +733,30 @@ class ConverterApp(tk.Tk):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=6, pady=4)
         ttk.Entry(parent, textvariable=var).grid(row=row, column=1, sticky="ew", padx=6, pady=4)
         ttk.Button(parent, text="Browse", command=browse_cb).grid(row=row, column=2, sticky="e", padx=6, pady=4)
+
+    def _sync_color_widgets(self, *_args) -> None:
+        for var, swatch in ((self.main_color, self.main_color_swatch), (self.outline_color, self.outline_color_swatch)):
+            value = var.get().strip()
+            try:
+                rgb = _hex_to_rgb(value)
+            except Exception:
+                continue
+            normalized = _rgb_to_hex(rgb)
+            if value != normalized:
+                # avoid infinite trace loops by only setting when needed
+                var.set(normalized)
+                return
+            swatch.config(bg=normalized)
+
+    def _pick_main_color(self) -> None:
+        _, hex_value = colorchooser.askcolor(color=self.main_color.get(), parent=self)
+        if hex_value:
+            self.main_color.set(_rgb_to_hex(tuple(int(round(v)) for v in _hex_to_rgb(hex_value))))
+
+    def _pick_outline_color(self) -> None:
+        _, hex_value = colorchooser.askcolor(color=self.outline_color.get(), parent=self)
+        if hex_value:
+            self.outline_color.set(_rgb_to_hex(tuple(int(round(v)) for v in _hex_to_rgb(hex_value))))
 
     def _browse_ttf(self) -> None:
         p = filedialog.askopenfilename(filetypes=[("TrueType font", "*.ttf *.otf"), ("All files", "*.*")])
@@ -627,6 +797,10 @@ class ConverterApp(tk.Tk):
             if not self.out_dds_path.get().strip():
                 raise FileNotFoundError("Choose a DDS output file.")
 
+            main_rgb = _hex_to_rgb(self.main_color.get())
+            outline_rgb = _hex_to_rgb(self.outline_color.get())
+            background_rgb = main_rgb if int(self.outline.get()) == 0 else outline_rgb
+
             self.log_line("Rendering glyphs...")
             convert_ttf_to_custom(
                 font_path=font_path,
@@ -637,6 +811,9 @@ class ConverterApp(tk.Tk):
                 kerning=int(self.kerning.get()),
                 atlas_width=int(self.atlas_width.get()),
                 force_pow2_height=bool(self.force_pow2_height.get()),
+                main_rgb=main_rgb,
+                outline_rgb=outline_rgb,
+                background_rgb=background_rgb,
                 json_out=json_out,
                 dds_out=dds_out,
             )
@@ -648,8 +825,6 @@ class ConverterApp(tk.Tk):
             self.log_line(str(exc))
             self.log_line(traceback.format_exc())
             messagebox.showerror("Conversion failed", str(exc))
-
-
 def main() -> None:
     app = ConverterApp()
     app.mainloop()
