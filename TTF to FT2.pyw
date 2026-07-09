@@ -33,6 +33,7 @@ import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageFont
+from fontTools.ttLib import TTFont
 
 # ---------------------------------------------------------------------------
 # DDS (DXT5) helpers
@@ -380,6 +381,35 @@ def normalize_chars(text: str) -> list[str]:
     return chars
 
 
+def unsupported_chars_for_font(font_path: Path, chars: Sequence[str]) -> list[str]:
+    with TTFont(str(font_path), lazy=True) as font:
+        cmap = font.getBestCmap() or {}
+    unsupported = [ch for ch in chars if ord(ch) not in cmap]
+    return unsupported
+
+
+def chars_from_custom_json_file(path: Path) -> list[str]:
+    root = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(root, dict):
+        raise ValueError("Expected a JSON object with a 'chars' list.")
+    chars_section = root.get("chars")
+    if not isinstance(chars_section, list):
+        raise ValueError("Could not find a 'chars' list in the JSON file.")
+
+    chars: list[str] = []
+    for entry in chars_section:
+        if not isinstance(entry, dict):
+            continue
+        ch = entry.get("char")
+        if isinstance(ch, str) and ch:
+            chars.append(ch)
+
+    chars = normalize_chars("".join(chars))
+    if not chars:
+        raise ValueError("No characters were found inside chars[*].char.")
+    return chars
+
+
 def glyph_name_for_char(ch: str) -> str:
     cp = ord(ch)
     if cp <= 0xFFFF:
@@ -696,9 +726,6 @@ def convert_ttf_to_custom(
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# GUI
-# ---------------------------------------------------------------------------
 
 class ConverterApp(tk.Tk):
     def __init__(self) -> None:
@@ -727,7 +754,7 @@ class ConverterApp(tk.Tk):
     def _build_ui(self) -> None:
         pad = {"padx": 6, "pady": 4}
 
-        cfg = ttk.LabelFrame(self, text="Common settings")
+        cfg = ttk.LabelFrame(self, text="Settings")
         cfg.pack(fill="x", **pad)
 
         self._add_spin(cfg, "Global height", self.height, 1, 4096, 0)
@@ -755,7 +782,7 @@ class ConverterApp(tk.Tk):
         cfg.columnconfigure(1, weight=1)
         cfg.columnconfigure(3, weight=1)
 
-        self.ttf_frame = ttk.LabelFrame(self, text="TTF -> custom")
+        self.ttf_frame = ttk.LabelFrame(self, text="Files")
         self.ttf_frame.pack(fill="x", **pad)
 
         self._add_path_row(self.ttf_frame, "TTF input", self.ttf_path, self._browse_ttf, 0)
@@ -769,6 +796,10 @@ class ConverterApp(tk.Tk):
         self.ttf_frame.columnconfigure(1, weight=1)
         self.ttf_frame.columnconfigure(2, weight=1)
         self.ttf_frame.rowconfigure(3, weight=1)
+
+        ttk.Button(self.ttf_frame, text="Import from json", command=self._import_chars_from_json).grid(
+            row=4, column=1, sticky="w", padx=6, pady=(0, 4)
+        )
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", **pad)
@@ -814,6 +845,20 @@ class ConverterApp(tk.Tk):
         if hex_value:
             self.outline_color.set(_rgb_to_hex(tuple(int(round(v)) for v in _hex_to_rgb(hex_value))))
 
+    def _import_chars_from_json(self) -> None:
+        p = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        if not p:
+            return
+        try:
+            chars = chars_from_custom_json_file(Path(p))
+        except Exception as exc:
+            messagebox.showerror("Import failed", str(exc))
+            return
+
+        self.char_text.delete("1.0", "end")
+        self.char_text.insert("1.0", "".join(chars))
+        self.log_line(f"Imported {len(chars)} characters from {Path(p).name}")
+
     def _browse_ttf(self) -> None:
         p = filedialog.askopenfilename(filetypes=[("TrueType font", "*.ttf *.otf"), ("All files", "*.*")])
         if p:
@@ -857,10 +902,33 @@ class ConverterApp(tk.Tk):
             outline_rgb = _hex_to_rgb(self.outline_color.get())
             background_rgb = main_rgb if int(self.outline.get()) == 0 else outline_rgb
 
+            chars_text = self.char_text.get("1.0", "end")
+            chars = normalize_chars(chars_text)
+            if not chars:
+                raise ValueError("Enter or paste the characters to export.")
+
+            unsupported = unsupported_chars_for_font(font_path, chars)
+            if unsupported:
+                preview = "".join(unsupported[:20])
+                more = "" if len(unsupported) <= 20 else f" ... (+{len(unsupported) - 20} more)"
+                msg = (
+                    "Some characters are not supported by this font:\n\n"
+                    f"{preview}{more}\n\n"
+                    "Do you want to skip these characters?\n"
+                    "Yes = skip unsupported characters\n"
+                    "No = try anyway"
+                )
+                if messagebox.askyesno("Unsupported characters", msg):
+                    chars = [ch for ch in chars if ch not in unsupported]
+                    if not chars:
+                        raise ValueError("After skipping unsupported characters, nothing is left to export.")
+                    chars_text = "".join(chars)
+                # else: keep original chars_text and try anyway
+
             self.log_line("Rendering glyphs...")
             convert_ttf_to_custom(
                 font_path=font_path,
-                charset_text=self.char_text.get("1.0", "end"),
+                charset_text=chars_text,
                 height=int(self.height.get()),
                 outline_px=int(self.outline.get()),
                 scale_pct=int(self.scale.get()),
