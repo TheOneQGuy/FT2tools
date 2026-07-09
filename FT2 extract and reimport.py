@@ -10,6 +10,7 @@ try:
     FT2 = Path(argv[1])
 except:
     input("Drag an FT2 to the .py file.")
+    exit()
 else:
     json_file=FT2.with_suffix(".json")
     dds_file=FT2.with_suffix(".dds")
