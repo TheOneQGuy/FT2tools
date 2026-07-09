@@ -24,8 +24,6 @@ Requires Pillow (Install using `py -m pip install pillow` in command prompt afte
 ## FT2 merge
 Allows you to merge multiple FT2 files together. Technically doesn't merge the FT2 files themselves but rather merges the extracted json+dds files, which you can re-imported into an actual FT2.
 
-Currently all fonts you merge have to have the exact same global height.
-
 Avoids double DXT compression by copying 4x4 DXT blocks from the input dds directly. On files with very little space between glyphs, this means that some parts of other glyphs will be in the dds too, but the json width only includes the width of the glyph itself and so this has no visible artifacts ingame.
 
 <img width="492" height="210" alt="image" src="https://github.com/user-attachments/assets/5f2e1a71-102d-40b9-b16e-de00f310551b" />
