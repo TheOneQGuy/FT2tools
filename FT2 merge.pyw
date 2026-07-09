@@ -8,8 +8,9 @@ What it does:
 - Uses the largest source height as the merged global height
 - Keeps each glyph aligned to the same 4x4 phase as its source DDS
 - Copies DXT5 blocks directly from the source DDS files into the output DDS
+- Gives every glyph a full tallest-height cell, centered by nearest-4px shift
 - Adds at least 4 pixels of spacing between packed glyph cells
-- Writes one merged JSON + one merged DXT5 DDS
+- Preserves any extra per-glyph JSON attributes and writes one merged DXT5 DDS
 
 Supported JSON input:
 - {"global_height": 60, "chars": [...]}
@@ -22,7 +23,7 @@ Each glyph entry needs at least:
 - y
 - width
 
-Extra keys are ignored.
+Extra keys are preserved on output.
 
 Dependencies:
     pip install pillow
@@ -62,6 +63,12 @@ def next_pow2(n: int) -> int:
     return 1 if n <= 1 else 1 << (n - 1).bit_length()
 
 
+def nearest_shift_4(delta_px: int) -> int:
+    """Round to the nearest multiple of 4, with ties rounding up."""
+    delta_px = max(0, int(delta_px))
+    return ((delta_px + 2) // 4) * 4
+
+
 def load_json_root(json_path: Path) -> Any:
     return json.loads(json_path.read_text(encoding="utf-8"))
 
@@ -91,17 +98,16 @@ def extract_entries_and_height(root: Any) -> tuple[list[dict[str, Any]], int | N
     for item in raw_entries:
         if "char" not in item or "x" not in item or "y" not in item or "width" not in item:
             continue
-        ch = str(item["char"])
-        if not ch:
+
+        # Keep all extra attributes exactly as they came in.
+        entry = dict(item)
+        entry["char"] = str(entry["char"])
+        if not entry["char"]:
             continue
-        entries.append(
-            {
-                "char": ch,
-                "x": int(item["x"]),
-                "y": int(item["y"]),
-                "width": max(1, int(item["width"])),
-            }
-        )
+        entry["x"] = int(entry["x"])
+        entry["y"] = int(entry["y"])
+        entry["width"] = max(1, int(entry["width"]))
+        entries.append(entry)
 
     if not entries:
         raise ValueError("No usable glyph entries were found in the JSON.")
@@ -209,9 +215,12 @@ class GlyphPlacement:
     src_y: int
     rect_w: int
     rect_h: int
+    cell_h: int
     width: int
+    extra_attrs: dict[str, Any]
     glyph_off_x: int = 0
     glyph_off_y: int = 0
+    source_shift_y: int = 0
     x: int = 0
     y: int = 0
 
@@ -246,7 +255,12 @@ def build_glyphs(sources: list[FontSource], output_height: int) -> list[GlyphPla
     glyphs: list[GlyphPlacement] = []
     seen: set[str] = set()
 
+    cell_h = round_up(output_height, 4)
+
     for src in sources:
+        # Shift each source by the closest 4px multiple toward centered.
+        source_shift_y = nearest_shift_4((output_height - src.height) // 2)
+
         for entry in src.entries:
             ch = str(entry["char"])
             if ch in seen:
@@ -274,9 +288,12 @@ def build_glyphs(sources: list[FontSource], output_height: int) -> list[GlyphPla
                     src_y=src_y,
                     rect_w=rect_w,
                     rect_h=rect_h,
+                    cell_h=cell_h,
                     width=int(entry["width"]),
+                    extra_attrs={k: v for k, v in entry.items() if k not in {"char", "x", "y", "width"}},
                     glyph_off_x=orig_x - src_x,
                     glyph_off_y=orig_y - src_y,
+                    source_shift_y=source_shift_y,
                 )
             )
 
@@ -304,6 +321,7 @@ def pack_glyphs(
     packed: list[GlyphPlacement] = []
 
     for g in glyphs:
+        cell_h = max(g.cell_h, g.rect_h + g.source_shift_y)
         if x > 0 and x + g.rect_w > atlas_width:
             y += row_h + row_gap
             x = 0
@@ -317,15 +335,18 @@ def pack_glyphs(
                 src_y=g.src_y,
                 rect_w=g.rect_w,
                 rect_h=g.rect_h,
+                cell_h=g.cell_h,
                 width=g.width,
+                extra_attrs=dict(g.extra_attrs),
                 glyph_off_x=g.glyph_off_x,
                 glyph_off_y=g.glyph_off_y,
+                source_shift_y=g.source_shift_y,
                 x=x,
                 y=y,
             )
         )
         x += g.rect_w + row_gap
-        row_h = max(row_h, g.rect_h)
+        row_h = max(row_h, cell_h)
 
     atlas_h = y + row_h
     atlas_h = round_up(atlas_h, 4)
@@ -346,6 +367,10 @@ def merge_sources(sources: list[FontSource], atlas_width: int, force_pow2: bool 
     dst_blocks = bytearray((atlas_w // 4) * (atlas_h // 4) * 16)
 
     for g in packed:
+        # Draw the source glyph inside a full-height cell; the cell itself is aligned
+        # to the tallest global height, while the visible source blocks are shifted
+        # by a nearest-4 centered amount.
+        dst_y = g.y + g.source_shift_y
         copy_dxt5_rect(
             src=g.src,
             dst_blocks=dst_blocks,
@@ -355,10 +380,19 @@ def merge_sources(sources: list[FontSource], atlas_width: int, force_pow2: bool 
             rect_w=g.rect_w,
             rect_h=g.rect_h,
             dst_x=g.x,
-            dst_y=g.y,
+            dst_y=dst_y,
         )
 
-    placements = [{"char": g.char, "x": g.x + g.glyph_off_x, "y": g.y + g.glyph_off_y, "width": g.width} for g in packed]
+    placements = []
+    for g in packed:
+        item = dict(g.extra_attrs)
+        item.update({
+            "char": g.char,
+            "x": g.x + g.glyph_off_x,
+            "y": g.y,
+            "width": g.width,
+        })
+        placements.append(item)
     out_json = {"global_height": output_height, "chars": placements}
     return bytes(dst_blocks), out_json, atlas_w, atlas_h
 
@@ -366,7 +400,7 @@ def merge_sources(sources: list[FontSource], atlas_width: int, force_pow2: bool 
 class MergeApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("FT2 merge")
+        self.title("Custom Font Merge Tool")
         self.geometry("1100x720")
 
         self.sources: list[FontSource] = []
@@ -391,6 +425,7 @@ class MergeApp(tk.Tk):
         ttk.Button(top, text="Remove selected", command=self.remove_selected).pack(side="left", padx=6)
         ttk.Button(top, text="Move up", command=lambda: self.move_selected(-1)).pack(side="left", padx=6)
         ttk.Button(top, text="Move down", command=lambda: self.move_selected(1)).pack(side="left", padx=6)
+        ttk.Button(top, text="Set height", command=self.set_selected_height).pack(side="left", padx=6)
 
         mid = ttk.Frame(self)
         mid.pack(fill="both", expand=True, **pad)
@@ -504,6 +539,25 @@ class MergeApp(tk.Tk):
         self.refresh_tree()
         self.tree.selection_set(str(new_idx))
 
+    def set_selected_height(self) -> None:
+        idx = self.selected_index()
+        if idx is None:
+            return
+        src = self.sources[idx]
+        value = simpledialog.askinteger(
+            "Set height",
+            f"Height for {src.json_path.name}:",
+            parent=self,
+            initialvalue=src.height,
+            minvalue=1,
+            maxvalue=4096,
+        )
+        if value is None:
+            return
+        src.height = int(value)
+        self.refresh_tree()
+        self.log_line(f"Updated {src.json_path.name} height to {src.height}px.")
+
     def browse_output_json(self) -> None:
         p = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json"), ("All files", "*.*")])
         if p:
@@ -526,12 +580,6 @@ class MergeApp(tk.Tk):
         try:
             if len(self.sources) < 2:
                 raise ValueError("Add at least two font sources first.")
-            
-            heights = set()
-            for i in self.sources:
-                heights.add(i.height)
-            if len(heights) > 1:
-                raise ValueError("Height of fonts must be the same.")
 
             json_out_str = self.output_json.get().strip()
             dds_out_str = self.output_dds.get().strip()
