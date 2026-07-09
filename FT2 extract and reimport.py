@@ -40,11 +40,11 @@ def get_global_height(file_bytes:bytes, returns_offset:bool=False):
     
     #Go left till you find a non-00 byte, then go left till you find a 00 byte
     while file_bytes[current_offset] == 0:
-        print("a",current_offset, hex(file_bytes[current_offset]))
+        # print("a",current_offset, hex(file_bytes[current_offset]))
         current_offset-=1
 
     while file_bytes[current_offset] != 0:
-        print("b",current_offset, hex(file_bytes[current_offset]))
+        # print("b",current_offset, hex(file_bytes[current_offset]))
         current_offset-=1
 
     #Now we're at the start of the third value in the header. Global height is the first one so just go back 8 bytes
@@ -97,7 +97,7 @@ def get_file_info(file_bytes:Path):
     ROTV_string='ROTV' if contains_ROTV else '\x00'*4
     if not contains_ROTV_space:
         ROTV_string=''
-    print(f'ROTV string: b"{ROTV_string}"')
+    print(f'ROTV string: "{ROTV_string}"')
 
 
 
@@ -150,7 +150,7 @@ def json_to_ft2(file_text:Path):
         new_global_height=60
     used_attribute_names=attribute_names[:attributes_count]
 
-  # Jon Burton's completely normal and not-at-all stupid FT2 rules:
+  # FT2 rules:
 
     # 1- Section 2 chars need to be sorted in unicode order.
 
@@ -159,8 +159,6 @@ def json_to_ft2(file_text:Path):
 
     # 3- For space character to work correctly, it needs to have index 0x20 in section 2,
     #    and section 1 needs to be re-ordered for this.
-
-  # (yk now i get why sav wanted to torture jon burton)
 
     json_list.sort(key=lambda x: x["char"])
 
@@ -278,7 +276,7 @@ def main():
 
     get_file_info(FT2)
     if json_file.is_file() or dds_file.is_file():
-        action=input("Do you want to override (0) or reimport (1)?")
+        action=input("DDS and JSON files with the same name already exist.\nDo you want to [0] override them or [1] reimport them to the FT2?")
         if action=="0" or not action:
             override()
         else:
