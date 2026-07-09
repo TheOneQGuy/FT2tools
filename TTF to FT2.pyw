@@ -423,6 +423,49 @@ def _union_bbox(font, chars: Sequence[str], outline_px: int) -> tuple[int, int, 
     return (min_x, min_y, max_x, max_y)
 
 
+def _center_fit_rgba(cell: Image.Image, target_h: int, background_rgba: tuple[int, int, int, int]) -> Image.Image:
+    """Center-crop or center-pad an RGBA cell to exactly target_h pixels tall."""
+    if cell.height == target_h:
+        return cell
+
+    if cell.height < target_h:
+        out = Image.new("RGBA", (cell.width, target_h), background_rgba)
+        y = (target_h - cell.height) // 2
+        out.alpha_composite(cell, (0, y))
+        return out
+
+    top = (cell.height - target_h) // 2
+    return cell.crop((0, top, cell.width, top + target_h))
+
+
+def _shift_fit_rgba(
+    cell: Image.Image,
+    target_h: int,
+    y_offset: int,
+    background_rgba: tuple[int, int, int, int],
+) -> Image.Image:
+    """Shift a fixed-height RGBA cell vertically, clipping anything outside the window."""
+    if cell.height != target_h:
+        cell = _center_fit_rgba(cell, target_h, background_rgba)
+
+    y_offset = int(y_offset)
+    if y_offset == 0:
+        return cell
+
+    out = Image.new("RGBA", (cell.width, target_h), background_rgba)
+
+    src_top = max(0, -y_offset)
+    dst_top = max(0, y_offset)
+    copy_h = min(cell.height - src_top, target_h - dst_top)
+
+    if copy_h > 0:
+        region = cell.crop((0, src_top, cell.width, src_top + copy_h))
+        out.alpha_composite(region, (0, dst_top))
+
+    return out
+
+
+
 def render_ttf_glyphs(
     font_path: Path,
     chars: Sequence[str],
@@ -430,23 +473,27 @@ def render_ttf_glyphs(
     outline_px: int,
     scale_pct: int = 100,
     kerning: int = 0,
+    y_offset: int = 0,
     main_rgb: tuple[int, int, int] = (255, 255, 255),
     outline_rgb: tuple[int, int, int] = (0, 0, 0),
 ) -> list[AtlasGlyph]:
     target_h = max(1, int(height))
     outline_px = max(0, int(outline_px))
-    scale_pct = max(1, min(100, int(scale_pct)))
+    scale_pct = max(1, min(400, int(scale_pct)))
     kerning = max(0, int(kerning))
+    y_offset = int(y_offset)
 
     background_rgb = main_rgb if outline_px == 0 else outline_rgb
     background_rgba = (*background_rgb, 0)
 
     pad = max(2, outline_px + 2)
+    y_margin = abs(y_offset)
 
+    # Fit the base font size using only the characters the user chose to export.
     lo = 1
     hi = max(2, target_h * 8)
-    best_font = None
-    best_bbox = None
+    base_font = None
+    base_bbox = None
 
     while lo <= hi:
         mid = (lo + hi) // 2
@@ -455,18 +502,28 @@ def render_ttf_glyphs(
         bbox_h = bbox[3] - bbox[1]
 
         if bbox_h + pad * 2 <= target_h:
-            best_font = font
-            best_bbox = bbox
+            base_font = font
+            base_bbox = bbox
             lo = mid + 1
         else:
             hi = mid - 1
 
-    if best_font is None or best_bbox is None:
+    if base_font is None or base_bbox is None:
         raise ValueError("Could not fit the font into the requested height.")
 
-    font = best_font
-    min_x, min_y, _, _ = best_bbox
-    baseline_y = pad - min_y
+    base_font_size = base_font.size if hasattr(base_font, "size") else target_h
+    render_font_size = max(1, round(base_font_size * scale_pct / 100))
+    font = ImageFont.truetype(str(font_path), size=render_font_size)
+
+    # Compute the bbox again at the scaled vector size so we can center/crop
+    # after mapping to bitmap, without resizing the bitmap itself.
+    render_bbox = _union_bbox(font, chars, outline_px)
+    render_h = max(target_h, (render_bbox[3] - render_bbox[1]) + pad * 2)
+
+    # Give the vector draw enough room to move up/down before rasterization.
+    # The later center-fit trims back to the fixed global height.
+    draw_h = render_h + (y_margin * 2)
+    baseline_y = pad - render_bbox[1] + y_margin + y_offset
 
     glyphs: list[AtlasGlyph] = []
 
@@ -480,7 +537,7 @@ def render_ttf_glyphs(
         right_overlap = max(0, int(math.ceil(x1 - font.getlength(ch))))
         vis_w = max(1, int(math.ceil(x1 - x0))) + pad * 2
 
-        cell = Image.new("RGBA", (vis_w, target_h), background_rgba)
+        cell = Image.new("RGBA", (vis_w, draw_h), background_rgba)
         draw = ImageDraw.Draw(cell)
 
         draw.text(
@@ -495,17 +552,11 @@ def render_ttf_glyphs(
 
         bb = cell.getbbox()
         if bb is not None:
-            cell = cell.crop((bb[0], 0, bb[2], target_h))
+            # Keep the full vertical extent here; the centering/cropping step below
+            # is what keeps the final bitmap at the requested global height.
+            cell = cell.crop((bb[0], 0, bb[2], draw_h))
 
-        if scale_pct != 100:
-            scaled_w = max(1, round(cell.width * scale_pct / 100))
-            scaled_h = max(1, round(cell.height * scale_pct / 100))
-            cell = cell.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
-
-            final_cell = Image.new("RGBA", (cell.width, target_h), background_rgba)
-            paste_y = (target_h - cell.height) // 2
-            final_cell.alpha_composite(cell, (0, paste_y))
-            cell = final_cell
+        cell = _center_fit_rgba(cell, target_h, background_rgba)
 
         if kerning > 0:
             left_target = kerning // 2
@@ -595,6 +646,7 @@ def convert_ttf_to_custom(
     outline_px: int,
     scale_pct: int,
     kerning: int,
+    y_offset: int,
     atlas_width: int,
     force_pow2_height: bool,
     main_rgb: tuple[int, int, int],
@@ -614,6 +666,7 @@ def convert_ttf_to_custom(
         outline_px=outline_px,
         scale_pct=scale_pct,
         kerning=kerning,
+        y_offset=y_offset,
         main_rgb=main_rgb,
         outline_rgb=outline_rgb,
     )
@@ -660,6 +713,7 @@ class ConverterApp(tk.Tk):
         self.outline = tk.IntVar(value=0)
         self.scale = tk.IntVar(value=100)
         self.kerning = tk.IntVar(value=0)
+        self.y_offset = tk.IntVar(value=0)
         self.force_pow2_height = tk.BooleanVar(value=True)
         self.atlas_width = tk.IntVar(value=1024)
         self.main_color = tk.StringVar(value="#ffffff")
@@ -679,8 +733,8 @@ class ConverterApp(tk.Tk):
         self._add_spin(cfg, "Global height", self.height, 1, 4096, 0)
         self._add_spin(cfg, "Outline px", self.outline, 0, 256, 1)
         self._add_spin(cfg, "Atlas width", self.atlas_width, 32, 8192, 2)
-        self._add_spin(cfg, "Global kerning", self.kerning, 0, 64, 0, 1)
-        self._add_spin(cfg, "Scale %", self.scale, 10, 100, 1, 1)
+        self._add_spin(cfg, "Kerning", self.kerning, 0, 64, 0, 1)
+        self._add_spin(cfg, "Scale %", self.scale, 10, 400, 1, 1)
 
         ttk.Checkbutton(cfg, text="Force power-of-two atlas height", variable=self.force_pow2_height).grid(
             row=1, column=4, columnspan=4, sticky="w", padx=6, pady=4
@@ -695,6 +749,8 @@ class ConverterApp(tk.Tk):
         self.outline_color_swatch = tk.Label(cfg, width=10, bg=self.outline_color.get(), relief="sunken", cursor="hand2")
         self.outline_color_swatch.grid(row=2, column=3, sticky="w", padx=6, pady=4)
         self.outline_color_swatch.bind("<Button-1>", lambda _e: self._pick_outline_color())
+
+        self._add_spin(cfg, "Y offset", self.y_offset, -2048, 2048, 2, 2)
 
         cfg.columnconfigure(1, weight=1)
         cfg.columnconfigure(3, weight=1)
@@ -809,6 +865,7 @@ class ConverterApp(tk.Tk):
                 outline_px=int(self.outline.get()),
                 scale_pct=int(self.scale.get()),
                 kerning=int(self.kerning.get()),
+                y_offset=int(self.y_offset.get()),
                 atlas_width=int(self.atlas_width.get()),
                 force_pow2_height=bool(self.force_pow2_height.get()),
                 main_rgb=main_rgb,
