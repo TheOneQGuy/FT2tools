@@ -1,7 +1,7 @@
 # FT2tools
 Tools for the Tt Games FT2 font format, one for extracting to json+dds and recompiling, the other ones for various things you can do with the dds and json files but automated. You can all tools at once by clicking the green "Code" button and then "Download ZIP". Alternatively if you aren't much familiar with running Python scripts, you can used compiled EXE versions found in the Releases section (Windows only).
 
-All of these tools are written in Python and you need it installed in order to use them.
+All of these tools are written in Python and you need it installed in order to use them (unless you use the EXE versions).
 
 ## FT2 extract and reimport
 Can extract FT2 into a json+dds and also reimport from json+dds into FT2.
