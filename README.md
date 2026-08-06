@@ -15,7 +15,7 @@ There's no GUI, drag your FT2 to the .py file; If a json or dds with the same na
 ## TTF to FT2
 Can convert TTF fonts to json+dds which can be reimported to an FT2. It also gives you the option for outlines and kerning.
 
-Requires the Pillow module (Unless using pre-compiled EXE version). Has a GUI and you just double click it to open it. It is recommended to use the size that the FT2 you're going to import to uses.
+Requires the Pillow and fonttools modules (Unless using pre-compiled EXE version). Has a GUI and you just double click it to open it. It is recommended to use the size that the FT2 you're going to import to uses.
 
 *This tool was coded by AI*
 
