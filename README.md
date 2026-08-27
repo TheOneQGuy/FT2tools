@@ -4,31 +4,61 @@ Tools for the Tt Games FT2 font format, one for extracting to json+dds and recom
 You can see the list of planned additions and fixes by going to the Issues tab, you can also suggest your own additions or fixes there.
 
 ## FT2 extract and reimport
-Can extract FT2 into a json+dds and also reimport from json+dds into FT2.
+Can extract FT2 (and other Tt font formats) into a json+dds and also reimport from json+dds into FT2.
 
-The json contains the characters along with their x, y, and width on the dds. The height is globally adjusted. Some FT2 versions have more attributes per character, but those are rarely used.
+The json contains some file flags as well as the characters along with their x, y, and width on the dds. Some FT2 versions have more attributes per character.
 
-Supports most FT2 versions, it doesn't support button FT2s (version 02) and LCU FT2s (version 04). It has also not been tested on TSS FT2s. However most games can read FT2s from previous games just fine.
+Extracting support:
+- All FT2 versions 01-0E (1-14)
+- LSW1 FNT
+- LSW2+ FNT
+- QFN, CQF, UFN
 
-There's no GUI, drag your FT2 to the .py file; If a json or dds with the same name as the FT2 is found, it will give you the option to reimport. (Note: in the latest version of python, to give arguments, you need to have "py" or "python" or any path to the python exe at the start of the command, else it won't work. This means that dragging to the py file will not work anymore and you have to manually give the arguments from cmd like this: `py ".py file path" ".ft2 file path"`
+Reimporting support:
+- All FT2 versions 01-0E (1-14)
+- (more soon)
 
-*This tool was coded by me.*
+Each font can have these possible header values (Not all versions have each field):
+- `global_height`: All glyphs use a shared height. This is that height.
+- `baseline`: Baseline, only does anything for some games, stored regardless.
+- `tracking`: Space between characters, usually just 0. Doesn't work on all games, stored regardless.
+- `max_descent`: Only does anything if height_cropping is enabled. I don't really know what it does though. It is usually `global_height - baseline`.
+- `height_cropping`: true or false, whether `top_crop` and `bottom_crop` values per each character are used. `height_cropping` is only an option for FT2 version 05+.
+- `single_channel_texture`: I don't even know what this does. But it seems to be true for all files I've found with it.
+- `SDF_texture`: true or false, whether the font texture is a [Signed Distance Field texture](https://www.google.com/search?q=Signed+Distance+Field+font&udm=2) or not.
+- `SDF_pad`: Pad value for the SDF texture if applicable.
+- `SDF_center`: Center value for the SDF texture if applicable.
+- `SDF_scale`: Scale value for the SDF texture if applicable.
+- `chars`: Dictionary of all characters in the font.
+- `kerning`: List of kernings for each two characters. Item example: `["Ta",-4.0]`
+
+Each glyph in `chars` can have these fields:
+- `char`: A string containing the glyph for this entry.
+- `x`: X value of the left of the glyph in the dds in pixels.
+- `y`: Y value of the left of the glyph in the dds in pixels.
+- `width`: Width of the glyph in the dds in pixels. Can be negative.
+- `top_crop`: How many pixels of the top of the glyph to not render. Will only work if `height_cropping` is enabled.
+- `bottom_crop`: How many pixels of the bottom of the glyph to not render. Will only work if `height_cropping` is enabled.
+- `draw_offset`: X offset for drawing this glyph.
+- `advance`: X offset for drawing the next glyph.
+- `page`: Only in version 08, which I have not seen at all so I don't know for sure what it does and how it works.
+- `special`: Either "space" or "string_ending".
+  - "space" means the character is not rendered at all and all other fields are ignored except the `width`.
+  - "string_ending" means any text will only be rendered up to before the first occurrence of the `char` in the text being rendered.
 
 ## TTF to FT2
-Can convert TTF fonts to json+dds which can be reimported to an FT2. It also gives you the option for outlines and kerning.
+Can convert TTF fonts to json+dds by rendering the vectors in the dds, which can be reimported to an FT2. It also gives you the option for outlines and kerning.
 
-Requires the Pillow and fonttools modules (Unless using pre-compiled EXE version). Has a GUI and you just double click it to open it. It is recommended to use the size that the FT2 you're going to import to uses.
+Requires the Pillow and fonttools modules (Unless using pre-compiled EXE version). Has a GUI and you just double click it to open it. It is recommended to use a global height around the same height as the font you are reimporting to.
 
-*This tool was coded by AI*
+*AI help was used for making this tool.*
 
 ## FT2 merge
 Allows you to merge multiple FT2 files together. Technically doesn't merge the FT2 files themselves but rather merges the extracted json+dds files, which you can re-imported into an actual FT2.
 
 Avoids double DXT compression by copying 4x4 DXT blocks from the input dds directly. On files with very little space between glyphs, this means that some parts of other glyphs will be in the dds too, but the json width only includes the width of the glyph itself and so this has no visible artifacts ingame.
 
-<img width="492" height="210" alt="image" src="https://github.com/user-attachments/assets/5f2e1a71-102d-40b9-b16e-de00f310551b" />
-
 The top-most font is preferred and only glyphs that are not included in the top font are gotten from the bottom ones.
 Requires the Pillow module (Unless using pre-compiled EXE version). it has a GUI and you just double click it to open it.
 
-*This tool was coded by AI*
+*AI help was used for making this tool.*
