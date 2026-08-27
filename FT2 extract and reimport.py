@@ -1,4 +1,4 @@
-from sys import argv
+from sys import argv, exit
 from pathlib import Path
 from struct import pack, unpack, error as structerror
 import json
@@ -6,13 +6,13 @@ import traceback
 from io import BytesIO
 
 try:
-    font_file = Path(argv[1])
-except:
-    input("Drag an FT2 to the .py file.")
-    exit()
-else:
-    json_file=font_file.with_suffix(".json")
-    DDS_file=font_file.with_suffix(".dds")
+    font_path = argv[1]
+except IndexError:
+    font_path = input("Drag an FT2 then press enter:\n").replace('"',"")
+
+font_file = Path(font_path)
+json_file=font_file.with_suffix(".json")
+DDS_file=font_file.with_suffix(".dds")
 
 def parse_FT2(FT2_bytes:bytes, endianness:str):
 
@@ -984,3 +984,4 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
         input("Press enter to exit.")
+        exit()
