@@ -662,7 +662,8 @@ def reimport_FT2(
     else:
         calculated_maxdescent = global_height - baseline
 
-    c+=4 # sendId
+    if version < 4:
+        c+=4 # sendId
 
     if 3 < version < 6:
         if distfieldpad is not None:
@@ -752,7 +753,7 @@ def reimport_FT2(
     FT2_bytearray[c:c + posTable_len_orig] = bytearray(postable_list_bytes)
     c+= len(postable_list_bytes)
     posTable_size_packed = pack(endianness+'I', len(posTable_list))
-
+    print(posTable_size_packed,posTable_size1_offset)
 
     if posTable_size0_offset is not None:
         FT2_bytearray[posTable_size0_offset:posTable_size0_offset+4] = (
