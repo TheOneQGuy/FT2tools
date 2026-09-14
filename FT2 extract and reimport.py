@@ -171,7 +171,7 @@ def parse_FT2(FT2_bytes:bytes, endianness:str):
             continue
             # space works weirdly, any character with pos_index == 0x20 is considered a space and its width is gotten from the header.
         if pos_index == 0x00:
-            chars.append({"char":char,"width":space_width,"special":"string_ending"})
+            chars.append({"char":char,"special":"string_ending"})
             continue
             # probably unintended feature but every character with pos_index == 0x00 is considered a string ending and anything coming after it in text.csv is ignored.
         try:
@@ -358,7 +358,7 @@ def parse_TCS_QFN(QFN_bytes:bytes,endianness:str):
             continue
             # space works weirdly, any character with pos_index == 0x20 is considered a space and its width is gotten from the header.
         if pos_index == 0x00:
-            chars.append({"char":char,"width":space_width,"special":"string_ending"})
+            chars.append({"char":char,"special":"string_ending"})
             continue
             # probably unintended feature but every character with pos_index == 0x00 is considered a string ending and it and anything coming after it in text.csv is ignored.
         try:
@@ -447,7 +447,7 @@ def parse_lsw2_FNT(FNT_bytes:bytes, endianness:str):
             continue
             # space works weirdly, any character with pos_index == 0x20 is considered a space and its width is gotten from the header.
         if pos_index == 0x00:
-            chars.append({"char":char,"width":space_width,"special":"string_ending"})
+            chars.append({"char":char,"special":"string_ending"})
             continue
             # probably unintended feature but every character with pos_index == 0x00 is considered a string ending and it and anything coming after it in text.csv is ignored.
         try:
@@ -468,10 +468,225 @@ def parse_lsw2_FNT(FNT_bytes:bytes, endianness:str):
     }
 
     # hacky solution; reloctable doesn't *need* to be exactly right after dds.
-    # but it is in all the vanilla files i found and i don't wanna calculate the real dds length from the header because lazy :)
+    # but it is in all the vanilla files i found and i don't wanna calculate
+    # the real dds length from the dds header because lazy :)
+
     DDS_bytes = FNT_bytes[DDS_offset:reloctable_offset]
 
     return json_ready, DDS_bytes
+
+def reimport_lsw2_FNT_update_offsets(
+    offsets_list:list,
+    file_update_offset:int,
+    len_orig:int,
+    len_new:int
+):
+
+    offsets_list = list(offsets_list)
+    for index,offset in enumerate(offsets_list):
+        if offset <= file_update_offset:
+            continue
+        offsets_list[index] = offset + len_new - len_orig
+
+    return offsets_list
+
+
+def reimport_lsw2_FNT(
+    FNT_bytes:bytes,
+    endianness:str,
+    json_info:dict,
+    dds_bytes:bytes
+)-> bytes:
+    FNT_bytearray = bytearray(FNT_bytes)
+    endianness_le_be = "be" if endianness==">" else "le"
+
+    c = 0
+
+    reloctable_offset, = unpack(endianness+'i',FNT_bytearray[c:c+4])
+    c = reloctable_offset
+    reloctable_size, = unpack(endianness+'i',FNT_bytearray[c:c+4]); c+=4
+    reloctable_items_abs = []
+    for i in range(reloctable_size):
+        reloctable_items_abs.append(
+            c + unpack(endianness+'i',FNT_bytearray[c:c+4])[0]
+        )
+        c += 4
+    
+    MISC_ATTR_NAMES = (
+        "global_height",
+        "baseline",
+        "tracking"
+    )
+    misc_attrs = []
+    for attr_name in MISC_ATTR_NAMES:
+        try:
+            misc_attrs.append(json_info[attr_name])
+        except KeyError:
+            misc_attrs.append(None)
+
+    global_height,\
+    baseline,\
+    tracking,\
+        = misc_attrs
+
+    int_falsy = lambda a : int(a) if a else 0
+
+
+    c = 4
+    container_start = unpack(endianness+'i',FNT_bytearray[c:c+4])[0] + c
+    c+=4
+    DDS_offset = unpack(endianness+'i',FNT_bytearray[c:c+4])[0] + c; c+=4
+    c = container_start
+
+    if dds_bytes is not None:
+        FNT_bytearray[DDS_offset:reloctable_offset] = (
+            bytearray(dds_bytes)
+        )
+        reloctable_offset, *reloctable_items_abs = (
+            reimport_lsw2_FNT_update_offsets(
+                (reloctable_offset, *reloctable_items_abs),
+                file_update_offset = DDS_offset,
+                len_orig = reloctable_offset - DDS_offset,
+                len_new = len(dds_bytes)
+            )
+        )
+
+    if json_info is not None:
+
+        #unk/unused
+        c+=4 
+        c+=2
+        c+=2
+        c+=4
+
+        poscount_old, charcount_old \
+            = unpack(endianness+'II',FNT_bytearray[c:c+8])
+
+        poscount_offset = c; c+=4
+        charcount_offset = c; c+=4
+
+        FNT_bytearray[c:c+4] = pack(endianness+'f',global_height); c+=4
+
+        if baseline is not None:
+            FNT_bytearray[c:c+4] = pack(endianness+'f',baseline)
+        c+=4
+        
+        try:
+            FNT_bytearray[c:c+4] = pack(
+                endianness+'f',
+                next(i for i in json_info["chars"]if i["special"]=="space")
+                    ["width"]
+            )
+        except KeyError:
+            pass
+        c+=4
+
+        c+=4 #unk/unused
+
+        if tracking is not None:
+            FNT_bytearray[c:c+4] = pack(endianness+'f',tracking)
+        c+=4
+
+        #more unk/unused
+        c+=4
+        c+=4
+        c+=4
+
+        postable_offset = c + unpack(endianness+"i",FNT_bytearray[c:c+4])[0]
+        postable_offset_offset = c
+        c+=4
+        chartable_offset = c + unpack(endianness+"i",FNT_bytearray[c:c+4])[0]
+        chartable_offset_offset = c
+        c+=4
+
+        #more unk/unused
+        # c+=4
+        # c+=4
+        # c+=4
+        # c+=4
+
+        postable_list, chartable_list  = (
+            generate_postable_chartable(json_info["chars"])
+        )
+
+        c = postable_offset
+
+        postable_list_bytes = b""
+
+        for current_pos in postable_list:
+            for attr_name in ("x","y","width"):
+                postable_list_bytes += pack(
+                    endianness+'f',
+                    current_pos.get(attr_name, 0)
+                )
+
+        postable_len_old = poscount_old * 12
+        postable_len_new = len(postable_list_bytes)
+
+        FNT_bytearray[c:c+postable_len_old] = postable_list_bytes
+
+        reloctable_offset, DDS_offset, \
+        postable_offset, chartable_offset, *reloctable_items_abs = \
+            reimport_lsw2_FNT_update_offsets(
+                (reloctable_offset, DDS_offset,
+                postable_offset, chartable_offset, *reloctable_items_abs),
+                file_update_offset=c,
+                len_orig=postable_len_old,
+                len_new=postable_len_new
+            )
+        
+        FNT_bytearray[poscount_offset:poscount_offset+4] = (
+            pack(endianness+'i', len(postable_list))
+        )
+
+        c = chartable_offset
+
+        charTable_list_bytes = b''
+        for char, pos_idx in chartable_list:
+            charTable_list_bytes += char.encode("utf-16-"+endianness_le_be)
+            charTable_list_bytes += pack(endianness+'H', pos_idx)
+
+        chartable_len_old = charcount_old * 4
+        chartable_len_new = len(charTable_list_bytes)
+
+        FNT_bytearray[charcount_offset:charcount_offset+4] = (
+            pack(endianness+'i', len(chartable_list))
+        )
+
+        FNT_bytearray[c:c+chartable_len_old] = charTable_list_bytes
+            
+        reloctable_offset, postable_offset, chartable_offset, \
+        DDS_offset, *reloctable_items_abs = (
+          reimport_lsw2_FNT_update_offsets(
+            offsets_list=(
+                reloctable_offset, postable_offset, chartable_offset,
+                DDS_offset, *reloctable_items_abs
+            ),
+            file_update_offset=c,
+            len_orig=chartable_len_old,
+            len_new=chartable_len_new
+          )
+        )
+
+        FNT_bytearray[postable_offset_offset:postable_offset_offset+4] = (
+            pack(endianness+'i', postable_offset - postable_offset_offset)
+        )
+        FNT_bytearray[chartable_offset_offset:chartable_offset_offset+4] = (
+            pack(endianness+'i', chartable_offset - chartable_offset_offset)
+        )
+        FNT_bytearray[8:12] = pack(endianness+'i', DDS_offset - 8)
+
+    # update offsets
+    FNT_bytearray[0:4] = pack(endianness+'i', reloctable_offset)
+    
+    c = reloctable_offset
+    c+=4
+    for reloctable_item in reloctable_items_abs:
+        FNT_bytearray[c:c+4] = pack(endianness+'i', reloctable_item - c)
+        c+=4
+
+    return(bytes(FNT_bytearray))
+
 
 def generate_postable_chartable(chars_list:list[dict]) -> tuple[list[dict],list[tuple[str,int]]]:
     """return postable, chartable"""
