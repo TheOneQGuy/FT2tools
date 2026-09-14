@@ -1,5 +1,5 @@
 # FT2tools
-Tools for the Tt Games FT2 font format, one for extracting to json+dds and recompiling, the other ones for various things you can do with the dds and json files but automated. You can all tools at once by clicking the green "Code" button and then "Download ZIP". Alternatively if you aren't much familiar with running Python scripts, you can used compiled EXE versions found in the Releases section (Windows only).
+Tools for the proprietary FT2, FNT, QFN, CQF, and UFN font formats use in Tt's games. The main one is for extracting to json+dds and recompiling json+dds back to the font formats. The other ones for various things you can do with the dds and json files but automated. You can all tools at once by clicking the green "Code" button and then "Download ZIP". Alternatively if you aren't much familiar with running Python scripts, you can used compiled EXE versions found in the Releases section (Windows only).
 
 You can see the list of planned additions and fixes by going to the Issues tab, you can also suggest your own additions or fixes there.
 
@@ -16,6 +16,7 @@ Extracting support:
 
 Reimporting support:
 - All FT2 versions 01-0E (1-14)
+- LSW2+ FNT
 - (more soon)
 
 Each font can have these possible header values (Not all versions have each field):
@@ -33,17 +34,17 @@ Each font can have these possible header values (Not all versions have each fiel
 - `kerning`: List of kernings for each two characters. Item example: `["Ta",-4.0]`
 
 Each glyph in `chars` can have these fields:
-- `char`: A string containing the glyph for this entry.
-- `x`: X value of the left of the glyph in the dds in pixels.
-- `y`: Y value of the left of the glyph in the dds in pixels.
-- `width`: Width of the glyph in the dds in pixels. Can be negative.
+- `char`: A string containing the glyph for this entry. Always required.
+- `x`: X value of the left of the glyph in the dds in pixels. Required unless the `special` field is used.
+- `y`: Y value of the left of the glyph in the dds in pixels. Required unless the `special` field is used.
+- `width`: Width of the glyph in the dds in pixels. Can be negative. Required unless `"special":"string_ending"`.
 - `top_crop`: How many pixels of the top of the glyph to not render. Will only work if `height_cropping` is enabled.
 - `bottom_crop`: How many pixels of the bottom of the glyph to not render. Will only work if `height_cropping` is enabled.
-- `draw_offset`: X offset for drawing this glyph.
-- `advance`: X offset for drawing the next glyph.
+- `draw_offset`: X offset for drawing this glyph. A positive value means more space between this glyph and the previous glyph. A negative value means this glyph overlaps with the previous glyph.
+- `advance`: X offset for drawing the next glyph. A positive value means more space between this glyph and the next glyph. A negative value means this glyph overlaps with the next glyph.
 - `page`: Only in version 08, which I have not seen at all so I don't know for sure what it does and how it works.
-- `special`: Either "space" or "string_ending".
-  - "space" means the character is not rendered at all and all other fields are ignored except the `width`.
+- `special`: Either "space" or "string_ending". If used, all other fields (except `char`) are ignored by the renderer.
+  - "space" means the character is not rendered at all but still has a `width`. Commonly used for the space character.
   - "string_ending" means any text will only be rendered up to before the first occurrence of the `char` in the text being rendered.
 
 ## TTF to FT2
